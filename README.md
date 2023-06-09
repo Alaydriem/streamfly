@@ -20,7 +20,7 @@ cargo build --examples
 ## Run
 
 ```sh
-./target/debug/streamfly
+./target/debug/streamfly serve
 ```
 
 ```sh
