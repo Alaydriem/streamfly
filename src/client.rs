@@ -46,19 +46,23 @@ impl Client for QuicClient {
         let (topic, stream) = self.rx.recv().await?;
         Ok((topic, stream))
     }
+
+    async fn close(&mut self) -> Result<()> {
+        self.handle.close(1u32.into());
+        Ok(())
+    }
 }
 
 async fn run_accept_streams(
     mut acceptor: StreamAcceptor,
     tx: async_channel::Sender<(String, Reader)>,
 ) -> Result<()> {
-    loop {
-        if let Some(stream) = acceptor.accept_receive_stream().await? {
-            let mut reader: Reader = Box::pin(stream);
-            let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
-            tx.send((msg.topic, reader)).await?;
-        }
+    while let Some(stream) = acceptor.accept_receive_stream().await? {
+        let mut reader: Reader = Box::pin(stream);
+        let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
+        tx.send((msg.topic, reader)).await?;
     }
+    Ok(())
 }
 
 pub async fn connect(

@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         }
         print!("{}", line);
     }
+    client.close().await?;
 
     Ok(())
 }

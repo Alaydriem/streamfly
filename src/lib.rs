@@ -19,6 +19,8 @@ pub trait Client: Send + Sync {
     async fn subscribe(&mut self, topic: &str) -> Result<()>;
 
     async fn receive_stream(&mut self) -> Result<(String, Reader)>;
+
+    async fn close(&mut self) -> Result<()>;
 }
 
 pub use crate::client::connect;
