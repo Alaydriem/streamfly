@@ -2,41 +2,41 @@ use std::{net::SocketAddr, path::Path};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{AsyncReadExt, AsyncWriteExt};
 use s2n_quic::{
     connection::StreamAcceptor,
     provider::datagram::default::{Endpoint, Sender},
 };
-use serde::{Deserialize, Serialize};
 
-use crate::{Client, Reader, Writer};
+use crate::{
+    io::{read_packet, write_packet},
+    msg::{OpenStreamMsg, SubscribeMsg},
+    Client, Reader, Writer,
+};
 
 struct QuicClient {
     handle: s2n_quic::connection::Handle,
     rx: async_channel::Receiver<(String, Reader)>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct OpenStreamMsg {
-    topic: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct SubscribeMsg {
-    topic: String,
-}
-
 #[async_trait]
 impl Client for QuicClient {
     async fn open_stream(&mut self, topic: &str) -> Result<Writer> {
-        let mut stream = self.handle.open_send_stream().await?;
-        stream.write_all(&topic.as_bytes()).await?;
-        Ok(Box::pin(stream))
+        let stream = self.handle.open_send_stream().await?;
+        let msg = OpenStreamMsg {
+            topic: topic.to_owned(),
+        };
+        let mut w: Writer = Box::pin(stream);
+        write_packet(&mut w, msg).await?;
+        Ok(w)
     }
 
     async fn subscribe(&mut self, topic: &str) -> Result<()> {
         self.handle.datagram_mut(|sender: &mut Sender| {
-            sender.send_datagram(topic.to_owned().into()).unwrap();
+            let msg = SubscribeMsg {
+                topic: topic.to_owned(),
+            };
+            let buf = serde_json::to_vec(&msg)?;
+            sender.send_datagram(buf.into()).unwrap();
             anyhow::Ok(())
         })??;
         Ok(())
@@ -53,12 +53,10 @@ async fn run_accept_streams(
     tx: async_channel::Sender<(String, Reader)>,
 ) -> Result<()> {
     loop {
-        if let Some(mut stream) = acceptor.accept_receive_stream().await? {
-            let mut buf = [0u8; 4];
-            stream.read_exact(&mut buf).await?;
-            let topic = String::from_utf8(buf.to_vec())?;
-            let reader: Reader = Box::pin(stream);
-            tx.send((topic, reader)).await?;
+        if let Some(stream) = acceptor.accept_receive_stream().await? {
+            let mut reader: Reader = Box::pin(stream);
+            let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
+            tx.send((msg.topic, reader)).await?;
         }
     }
 }
