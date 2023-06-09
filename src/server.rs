@@ -1,8 +1,9 @@
 use std::{path::Path, sync::Arc, task::Poll};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+use async_channel::Sender;
 use futures::{future::poll_fn, lock::Mutex, AsyncReadExt, AsyncWriteExt};
-use log::{debug, info};
+use log::{debug, error, info};
 use s2n_quic::{
     connection::{Handle, StreamAcceptor},
     provider::datagram::default::{Endpoint, Receiver},
@@ -46,56 +47,51 @@ async fn process_conn(
     mut acceptor: StreamAcceptor,
 ) -> Result<()> {
     let remote_addr = handle.remote_addr()?.to_string();
-    info!("connection ++ : {}", remote_addr);
+    info!("connection ++: {}", remote_addr);
 
-    loop {
-        let all_handles_1 = all_handles.clone();
-        let all_handles_2 = all_handles.clone();
-        let handle_1 = handle.clone();
+    tokio::spawn(recv_datagrams_loop(all_handles.clone(), handle.clone()));
 
-        tokio::select! {
-            res = poll_fn(|cx| {
-                match handle.datagram_mut(|recv: &mut Receiver| recv.poll_recv_datagram(cx)) {
-                    Ok(value) => value.map(Ok),
-                    Err(err) => Poll::Ready(Err(err)),
-                }
-            }) => {
-                match res? {
-                    Ok(buf) => {
-                        let msg = serde_json::from_slice::<SubscribeMsg>(&buf.to_vec())?;
-                        let mut all_handles = all_handles_1.lock().await;
-                        all_handles.push((msg.topic, handle_1));
-                    }
-                    Err(e) => {
-                        debug!("{}", e);
-                        break ()
-                    }
-                };
-            }
-
-
-            res = acceptor.accept_receive_stream() => {
-                if let Some(stream)= res? {
-                    tokio::spawn(process_stream(all_handles_2, stream));
-                } else {
-                    break ()
-                }
-            }
-        };
+    while let Ok(Some(stream)) = acceptor.accept_receive_stream().await {
+        tokio::spawn(process_recv_stream(all_handles.clone(), stream));
     }
 
-    info!("connection -- : {}", remote_addr);
+    info!("connection --: {}", remote_addr);
 
     Ok(())
 }
 
-async fn process_stream(
+async fn recv_datagrams_loop(
+    all_handles: Arc<Mutex<Vec<(String, Handle)>>>,
+    handle: Handle,
+) -> Result<()> {
+    loop {
+        match poll_fn(|cx| {
+            match handle.datagram_mut(|recv: &mut Receiver| recv.poll_recv_datagram(cx)) {
+                Ok(value) => value.map(Ok),
+                Err(err) => Poll::Ready(Err(err)),
+            }
+        })
+        .await?
+        {
+            Ok(buf) => {
+                let msg = serde_json::from_slice::<SubscribeMsg>(&buf.to_vec())?;
+                let mut all_handles = all_handles.lock().await;
+                all_handles.push((msg.topic, handle.clone()));
+            }
+            Err(e) => {
+                bail!(e);
+            }
+        };
+    }
+}
+
+async fn process_recv_stream(
     all_handles: Arc<Mutex<Vec<(String, Handle)>>>,
     stream: ReceiveStream,
 ) -> Result<()> {
     let remote_addr = stream.connection().remote_addr()?.to_string();
     let stream_id = stream.id();
-    info!("stream ++: {}|{}", remote_addr, stream_id);
+    info!("recv_stream ++: {}|{}", remote_addr, stream_id);
 
     let mut reader: Reader = Box::pin(stream);
     let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
@@ -104,46 +100,73 @@ async fn process_stream(
 
     for (topic, handle) in all_handles.as_mut_slice() {
         if topic == &msg.topic {
-            let mut w: Writer = Box::pin(handle.open_send_stream().await?);
-            write_packet(&mut w, msg.to_owned()).await?;
-
-            let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
-            tx_list.push(tx);
-
-            tokio::spawn(async move {
-                loop {
-                    match rx.recv().await {
-                        Ok(buf) => {
-                            w.write_all(&buf).await?;
-                        }
-                        Err(_) => {
-                            break;
-                        }
-                    }
-                }
-                w.close().await?;
-                anyhow::Ok(())
-            });
-        }
-    }
-
-    let mut buf = [0u8; 1024];
-    loop {
-        let length = reader.read(&mut buf).await?;
-        if length == 0 {
-            debug!("read length == 0");
-            for tx in &tx_list {
-                tx.close();
+            if let Err(e) = open_stream(handle, &msg, &mut tx_list).await {
+                error!("{}", e);
             }
-            break;
-        }
-
-        for tx in &tx_list {
-            tx.send(buf[..length].into()).await?;
         }
     }
 
-    info!("stream --: {}|{}", remote_addr, stream_id);
+    let mut buf = [0u8; 4096];
+    loop {
+        match reader.read(&mut buf).await {
+            Ok(length) => {
+                if length == 0 {
+                    break;
+                }
+
+                debug!("recv {} data from {}|{}", length, remote_addr, stream_id);
+
+                for tx in &tx_list {
+                    tx.send(buf[..length].into()).await?;
+                }
+            }
+
+            Err(e) => {
+                debug!("{}", e);
+
+                for tx in &tx_list {
+                    tx.close();
+                }
+                break;
+            }
+        }
+    }
+
+    info!("recv_stream --: {}|{}", remote_addr, stream_id);
+
+    Ok(())
+}
+
+async fn open_stream(
+    handle: &mut Handle,
+    msg: &OpenStreamMsg,
+    tx_list: &mut Vec<Sender<Vec<u8>>>,
+) -> Result<()> {
+    let stream = handle.open_send_stream().await?;
+    let remote_addr = stream.connection().remote_addr()?.to_string();
+    let stream_id = stream.id();
+    info!("send_stream ++: {}|{}", remote_addr, stream_id);
+
+    let mut w: Writer = Box::pin(stream);
+    write_packet(&mut w, msg.to_owned()).await?;
+
+    let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
+    tx_list.push(tx);
+
+    tokio::spawn(async move {
+        loop {
+            if let Ok(buf) = rx.recv().await {
+                debug!("send {} data to {}|{}", buf.len(), remote_addr, stream_id);
+                if let Err(e) = w.write_all(&buf).await {
+                    error!("{}", e);
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        info!("send_stream --: {}|{}", remote_addr, stream_id);
+    });
 
     Ok(())
 }

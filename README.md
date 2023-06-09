@@ -9,9 +9,13 @@ manipulate these streams in their applications, just like the stdin & stdout.
 
 ## Build
 
+- build streamfly cli command
+
 ```sh
 cargo build
 ```
+
+- build examples
 
 ```sh
 cargo build --examples
@@ -19,13 +23,19 @@ cargo build --examples
 
 ## Run
 
+- start streamfly server
+
 ```sh
-./target/debug/streamfly serve
+RUST_LOG=debug ./target/debug/streamfly serve
 ```
+
+- subscribe a stream
 
 ```sh
 ./target/debug/examples/sub
 ```
+
+- publish a stream, and then write data
 
 ```sh
 ./target/debug/examples/pub

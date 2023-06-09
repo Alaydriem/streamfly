@@ -27,6 +27,7 @@ async fn main() -> Result<()> {
         stream.write_all(msg.as_bytes()).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
+    stream.close().await?;
     client.close().await?;
 
     Ok(())

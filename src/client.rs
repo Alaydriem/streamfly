@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::Path};
 
 use anyhow::Result;
 use async_trait::async_trait;
+use log::error;
 use s2n_quic::{
     connection::StreamAcceptor,
     provider::datagram::default::{Endpoint, Sender},
@@ -91,7 +92,9 @@ pub async fn connect(
     let (handle, acceptor) = conn.split();
     let (tx, rx) = async_channel::unbounded();
     tokio::spawn(async move {
-        run_accept_streams(acceptor, tx).await.unwrap();
+        if let Err(e) = run_accept_streams(acceptor, tx).await {
+            error!("{}", e);
+        }
     });
 
     Ok(Box::new(QuicClient { handle, rx }))
