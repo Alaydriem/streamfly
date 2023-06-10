@@ -23,8 +23,8 @@ async fn main() -> Result<()> {
     let (_topic, stream) = client.receive_stream().await?;
     let mut buf_reader = BufReader::new(stream);
 
-    let mut line = String::new();
     loop {
+        let mut line = String::new();
         let len = buf_reader.read_line(&mut line).await?;
         if len == 0 {
             break;

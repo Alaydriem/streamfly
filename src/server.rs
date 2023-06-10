@@ -1,18 +1,17 @@
-use std::{path::Path, sync::Arc, task::Poll};
+use std::{default::Default, path::Path, sync::Arc, task::Poll};
 
 use anyhow::{bail, Result};
-use async_channel::Sender;
 use futures::{future::poll_fn, lock::Mutex, AsyncReadExt, AsyncWriteExt};
 use log::{debug, error, info};
 use s2n_quic::{
     connection::{Handle, StreamAcceptor},
-    provider::datagram::default::{Endpoint, Receiver},
+    provider::datagram::default::{Endpoint, Receiver, Sender},
     stream::ReceiveStream,
 };
 
 use crate::{
     io::{read_packet, write_packet},
-    msg::{OpenStreamMsg, SubscribeMsg},
+    msg::{OpenStreamMsg, SubscribeAckMsg, SubscribeMsg},
     Reader, Writer,
 };
 
@@ -75,8 +74,22 @@ async fn recv_datagrams_loop(
         {
             Ok(buf) => {
                 let msg = serde_json::from_slice::<SubscribeMsg>(&buf.to_vec())?;
+                let topic = msg.topic;
+
+                let msg = SubscribeAckMsg {
+                    ok: true,
+                    ..Default::default()
+                };
+                let buf = serde_json::to_vec(&msg)?;
+                handle.datagram_mut(|sender: &mut Sender| {
+                    if let Err(e) = sender.send_datagram(buf.into()) {
+                        bail!(e);
+                    }
+                    anyhow::Ok(())
+                })??;
+
                 let mut all_handles = all_handles.lock().await;
-                all_handles.push((msg.topic, handle.clone()));
+                all_handles.push((topic, handle.clone()));
             }
             Err(e) => {
                 bail!(e);
@@ -140,7 +153,7 @@ async fn process_recv_stream(
 async fn open_stream(
     handle: &mut Handle,
     msg: &OpenStreamMsg,
-    tx_list: &mut Vec<Sender<Vec<u8>>>,
+    tx_list: &mut Vec<async_channel::Sender<Vec<u8>>>,
 ) -> Result<()> {
     let stream = handle.open_send_stream().await?;
     let remote_addr = stream.connection().remote_addr()?.to_string();

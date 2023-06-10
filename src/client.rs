@@ -1,16 +1,17 @@
-use std::{net::SocketAddr, path::Path};
+use std::{net::SocketAddr, path::Path, task::Poll};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
+use futures::future::poll_fn;
 use log::error;
 use s2n_quic::{
     connection::StreamAcceptor,
-    provider::datagram::default::{Endpoint, Sender},
+    provider::datagram::default::{Endpoint, Receiver, Sender},
 };
 
 use crate::{
     io::{read_packet, write_packet},
-    msg::{OpenStreamMsg, SubscribeMsg},
+    msg::{OpenStreamMsg, SubscribeAckMsg, SubscribeMsg},
     Client, Reader, Writer,
 };
 
@@ -32,14 +33,39 @@ impl Client for QuicClient {
     }
 
     async fn subscribe(&mut self, topic: &str) -> Result<()> {
+        let msg = SubscribeMsg {
+            topic: topic.to_owned(),
+        };
+        let buf = serde_json::to_vec(&msg)?;
         self.handle.datagram_mut(|sender: &mut Sender| {
-            let msg = SubscribeMsg {
-                topic: topic.to_owned(),
-            };
-            let buf = serde_json::to_vec(&msg)?;
-            sender.send_datagram(buf.into()).unwrap();
+            if let Err(e) = sender.send_datagram(buf.into()) {
+                bail!(e);
+            }
             anyhow::Ok(())
         })??;
+
+        match poll_fn(|cx| {
+            match self
+                .handle
+                .datagram_mut(|recv: &mut Receiver| recv.poll_recv_datagram(cx))
+            {
+                Ok(value) => value.map(Ok),
+                Err(err) => Poll::Ready(Err(err)),
+            }
+        })
+        .await?
+        {
+            Ok(buf) => {
+                let msg = serde_json::from_slice::<SubscribeAckMsg>(&buf)?;
+                if !msg.ok {
+                    bail!(msg.reason);
+                }
+            }
+            Err(e) => {
+                bail!(e);
+            }
+        }
+
         Ok(())
     }
 
