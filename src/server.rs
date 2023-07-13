@@ -12,6 +12,7 @@ use s2n_quic::{
 use crate::{
     io::{read_packet, write_packet},
     msg::{OpenStreamMsg, SubscribeAckMsg, SubscribeMsg},
+    stream::{new_reader, new_writer},
     Reader, Writer,
 };
 
@@ -19,25 +20,29 @@ pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
     let datagram_provider = Endpoint::builder()
         .with_send_capacity(200)?
         .with_recv_capacity(200)?
-        .build()
-        .unwrap();
+        .build()?;
 
-    let mut s = s2n_quic::Server::builder()
+    match s2n_quic::Server::builder()
         .with_tls((cert, key))?
         .with_io(addr)?
         .with_datagram(datagram_provider)?
         .start()
-        .unwrap();
+    {
+        Err(e) => {
+            bail!("{}", e)
+        }
+        Ok(mut s) => {
+            let all_handles = Arc::new(Mutex::new(Vec::default()));
 
-    let all_handles = Arc::new(Mutex::new(Vec::default()));
+            while let Some(conn) = s.accept().await {
+                let all_handles_cloned = all_handles.clone();
+                let (handle, acceptor) = conn.split();
+                tokio::spawn(process_conn(all_handles_cloned, handle, acceptor));
+            }
 
-    while let Some(conn) = s.accept().await {
-        let all_handles_cloned = all_handles.clone();
-        let (handle, acceptor) = conn.split();
-        tokio::spawn(process_conn(all_handles_cloned, handle, acceptor));
+            Ok(())
+        }
     }
-
-    Ok(())
 }
 
 async fn process_conn(
@@ -103,10 +108,9 @@ async fn process_recv_stream(
     stream: ReceiveStream,
 ) -> Result<()> {
     let remote_addr = stream.connection().remote_addr()?.to_string();
-    let stream_id = stream.id();
-    info!("recv_stream ++: {}|{}", remote_addr, stream_id);
+    let mut reader: Reader = new_reader(stream);
+    info!("recv_stream ++: {}-{}", remote_addr, reader.id());
 
-    let mut reader: Reader = Box::pin(stream);
     let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
     let mut all_handles = all_handles.lock().await;
     let mut tx_list = vec![];
@@ -127,7 +131,7 @@ async fn process_recv_stream(
                     break;
                 }
 
-                debug!("recv {} data from {}|{}", length, remote_addr, stream_id);
+                debug!("recv {} bytes from {}-{}", length, remote_addr, reader.id());
 
                 for tx in &tx_list {
                     tx.send(buf[..length].into()).await?;
@@ -145,7 +149,7 @@ async fn process_recv_stream(
         }
     }
 
-    info!("recv_stream --: {}|{}", remote_addr, stream_id);
+    info!("recv_stream --: {}-{}", remote_addr, reader.id());
 
     Ok(())
 }
@@ -157,11 +161,10 @@ async fn open_stream(
 ) -> Result<()> {
     let stream = handle.open_send_stream().await?;
     let remote_addr = stream.connection().remote_addr()?.to_string();
-    let stream_id = stream.id();
-    info!("send_stream ++: {}|{}", remote_addr, stream_id);
+    let mut writer: Writer = new_writer(stream);
+    info!("send_stream ++: {}-{}", remote_addr, writer.id());
 
-    let mut w: Writer = Box::pin(stream);
-    write_packet(&mut w, msg.to_owned()).await?;
+    write_packet(&mut writer, msg.to_owned()).await?;
 
     let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
     tx_list.push(tx);
@@ -169,8 +172,13 @@ async fn open_stream(
     tokio::spawn(async move {
         loop {
             if let Ok(buf) = rx.recv().await {
-                debug!("send {} data to {}|{}", buf.len(), remote_addr, stream_id);
-                if let Err(e) = w.write_all(&buf).await {
+                debug!(
+                    "send {} bytes to {}-{}",
+                    buf.len(),
+                    remote_addr,
+                    writer.id()
+                );
+                if let Err(e) = writer.write_all(&buf).await {
                     error!("{}", e);
                     break;
                 }
@@ -178,7 +186,7 @@ async fn open_stream(
                 break;
             }
         }
-        info!("send_stream --: {}|{}", remote_addr, stream_id);
+        info!("send_stream --: {}-{}", remote_addr, writer.id());
     });
 
     Ok(())

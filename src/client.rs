@@ -12,6 +12,7 @@ use s2n_quic::{
 use crate::{
     io::{read_packet, write_packet},
     msg::{OpenStreamMsg, SubscribeAckMsg, SubscribeMsg},
+    stream::{new_reader, new_writer},
     Client, Reader, Writer,
 };
 
@@ -27,9 +28,9 @@ impl Client for QuicClient {
         let msg = OpenStreamMsg {
             topic: topic.to_owned(),
         };
-        let mut w: Writer = Box::pin(stream);
-        write_packet(&mut w, msg).await?;
-        Ok(w)
+        let mut writer: Writer = new_writer(stream);
+        write_packet(&mut writer, msg).await?;
+        Ok(writer)
     }
 
     async fn subscribe(&mut self, topic: &str) -> Result<()> {
@@ -85,7 +86,7 @@ async fn run_accept_streams(
     tx: async_channel::Sender<(String, Reader)>,
 ) -> Result<()> {
     while let Some(stream) = acceptor.accept_receive_stream().await? {
-        let mut reader: Reader = Box::pin(stream);
+        let mut reader: Reader = new_reader(stream);
         let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
         tx.send((msg.topic, reader)).await?;
     }
@@ -100,28 +101,32 @@ pub async fn connect(
     let datagram_provider = Endpoint::builder()
         .with_send_capacity(200)?
         .with_recv_capacity(200)?
-        .build()
-        .unwrap();
+        .build()?;
 
-    let c: s2n_quic::Client = s2n_quic::Client::builder()
+    match s2n_quic::Client::builder()
         .with_tls(cert)?
         .with_io("0.0.0.0:0")?
         .with_datagram(datagram_provider)?
         .start()
-        .unwrap();
-
-    let mut conn = c
-        .connect(s2n_quic::client::Connect::new(server_addr).with_server_name(server_name))
-        .await?;
-    conn.keep_alive(true)?;
-
-    let (handle, acceptor) = conn.split();
-    let (tx, rx) = async_channel::unbounded();
-    tokio::spawn(async move {
-        if let Err(e) = run_accept_streams(acceptor, tx).await {
-            error!("{}", e);
+    {
+        Err(e) => {
+            bail!("{}", e)
         }
-    });
+        Ok(c) => {
+            let mut conn = c
+                .connect(s2n_quic::client::Connect::new(server_addr).with_server_name(server_name))
+                .await?;
+            conn.keep_alive(true)?;
 
-    Ok(Box::new(QuicClient { handle, rx }))
+            let (handle, acceptor) = conn.split();
+            let (tx, rx) = async_channel::unbounded();
+            tokio::spawn(async move {
+                if let Err(e) = run_accept_streams(acceptor, tx).await {
+                    error!("{}", e);
+                }
+            });
+
+            Ok(Box::new(QuicClient { handle, rx }))
+        }
+    }
 }

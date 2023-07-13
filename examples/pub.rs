@@ -19,15 +19,15 @@ const TOPIC: &str = "abcd";
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut client = new_client().await?;
-    let mut stream = client.open_stream(TOPIC).await?;
+    let mut writer = client.open_stream(TOPIC).await?;
 
     for i in 0..5 {
         let msg = format!("{}: Hello, Streamfly!\n", i);
         print!("{}", msg);
-        stream.write_all(msg.as_bytes()).await?;
+        writer.write_all(msg.as_bytes()).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
-    stream.close().await?;
+    writer.close().await?;
     client.close().await?;
 
     Ok(())

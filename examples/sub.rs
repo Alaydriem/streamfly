@@ -20,12 +20,12 @@ async fn main() -> Result<()> {
     let mut client = new_client().await?;
     client.subscribe(TOPIC).await?;
 
-    let (_topic, stream) = client.receive_stream().await?;
-    let mut buf_reader = BufReader::new(stream);
+    let (_topic, reader) = client.receive_stream().await?;
+    let mut reader = BufReader::new(reader);
 
     loop {
         let mut line = String::new();
-        let len = buf_reader.read_line(&mut line).await?;
+        let len = reader.read_line(&mut line).await?;
         if len == 0 {
             break;
         }

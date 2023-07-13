@@ -1,16 +1,15 @@
-use std::pin::Pin;
-
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{AsyncRead, AsyncWrite};
 
 mod client;
 mod io;
 mod msg;
 mod server;
+mod stream;
 
-pub type Reader = Pin<Box<dyn AsyncRead + Send + Sync>>;
-pub type Writer = Pin<Box<dyn AsyncWrite + Send + Sync>>;
+pub use crate::client::connect;
+pub use crate::server::serve;
+pub use crate::stream::{Reader, Writer};
 
 #[async_trait]
 pub trait Client: Send + Sync {
@@ -22,6 +21,3 @@ pub trait Client: Send + Sync {
 
     async fn close(&mut self) -> Result<()>;
 }
-
-pub use crate::client::connect;
-pub use crate::server::serve;
