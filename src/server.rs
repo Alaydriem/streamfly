@@ -115,20 +115,13 @@ async fn process_recv_stream(
             tx_list.push(tx);
         }
     }
-    drop(all_handles);
 
-    while let Some(buf) = reader.receive().await? {
-        debug!("recv {} bytes from {}", buf.len(), remote_addr);
-
-        for tx in &tx_list {
-            tx.send(buf.to_owned().into()).await?;
+    tokio::spawn(async move {
+        if let Err(e) = copy_data_to_tx_list(reader, tx_list, &remote_addr).await {
+            error!("copy_data_to_tx_list {}:", e);
         }
-    }
-
-    for tx in &tx_list {
-        tx.close();
-    }
-    info!("recv_stream --: {}", remote_addr);
+        info!("recv_stream --: {}", remote_addr);
+    });
 
     Ok(())
 }
@@ -151,13 +144,43 @@ async fn open_stream(
 
     let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
     tokio::spawn(async move {
-        while let Ok(buf) = rx.recv().await {
-            debug!("send {} bytes to {}", buf.len(), remote_addr);
-            writer.write_all(&buf).await?;
+        if let Err(e) = copy_data_from_rx(rx, writer, &remote_addr).await {
+            error!("copy_data_from_rx: {}", e);
         }
         info!("send_stream --: {}", remote_addr);
-        anyhow::Ok(())
     });
 
     Ok(tx)
+}
+
+async fn copy_data_from_rx(
+    rx: async_channel::Receiver<Vec<u8>>,
+    mut writer: Writer,
+    remote_addr: &str,
+) -> anyhow::Result<()> {
+    while let Ok(buf) = rx.recv().await {
+        debug!("send {} bytes to {}", buf.len(), remote_addr);
+        writer.write_all(&buf).await?;
+    }
+    Ok(())
+}
+
+async fn copy_data_to_tx_list(
+    mut reader: Reader,
+    mut tx_list: Vec<async_channel::Sender<Vec<u8>>>,
+    remote_addr: &str,
+) -> anyhow::Result<()> {
+    while let Some(buf) = reader.receive().await? {
+        debug!("recv {} bytes from {}", buf.len(), remote_addr);
+
+        for tx in &tx_list {
+            if tx.send(buf.to_owned().into()).await.is_err() {
+                tx.close();
+            }
+        }
+
+        tx_list.retain(|tx| !tx.is_closed());
+    }
+
+    Ok(())
 }
