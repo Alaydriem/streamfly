@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{bail, Result};
 use futures::{lock::Mutex, AsyncWriteExt};
-use log::{debug, info};
+use log::{debug, error, info};
 use s2n_quic::{
     connection::Handle, provider::datagram::default::Endpoint, stream::ReceiveStream, Connection,
 };
@@ -33,7 +33,12 @@ pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
             let all_handles = Arc::new(Mutex::new(HashMap::new()));
 
             while let Some(conn) = s.accept().await {
-                tokio::spawn(process_conn(all_handles.to_owned(), conn));
+                let all_handles_cloned = all_handles.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = process_conn(all_handles_cloned, conn).await {
+                        error!("process_conn: {}", e);
+                    }
+                });
             }
 
             Ok(())
@@ -49,14 +54,26 @@ async fn process_conn(
     let remote_addr = handle.remote_addr()?.to_string();
     info!("connection ++: {}", remote_addr);
 
-    tokio::spawn(recv_datagrams_loop(all_handles.to_owned(), handle));
+    let all_handles_cloned = all_handles.clone();
+    tokio::spawn(async move {
+        if let Err(e) = recv_datagrams_loop(all_handles_cloned, handle).await {
+            error!("recv_datagrams_loop: {}", e);
+        }
+    });
 
     while let Ok(Some(stream)) = acceptor.accept_receive_stream().await {
-        tokio::spawn(process_recv_stream(all_handles.to_owned(), stream));
+        let all_handles_cloned = all_handles.clone();
+        tokio::spawn(async move {
+            if let Err(e) = process_recv_stream(all_handles_cloned, stream).await {
+                error!("process_recv_stream: {}", e);
+            }
+        });
     }
 
     info!("connection --: {}", remote_addr);
-    all_handles.lock().await.remove(&remote_addr);
+    if let Some((channel, _)) = all_handles.lock().await.remove(&remote_addr) {
+        info!("subscriber --: [{}], {}", channel, remote_addr);
+    }
 
     Ok(())
 }
@@ -73,6 +90,7 @@ async fn recv_datagrams_loop(
             MsgType::Subcribe => {
                 let msg: MsgStream = rmp_serde::from_slice(&req.payload)?;
                 let mut all_handles = all_handles.lock().await;
+                info!("subscriber ++: [{}], {}", msg.channel, remote_addr);
                 all_handles.insert(remote_addr.to_owned(), (msg.channel, handle.to_owned()));
             }
         }

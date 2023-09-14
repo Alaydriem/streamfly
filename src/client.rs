@@ -97,7 +97,7 @@ pub async fn new_client(
             let tx_map_cloned = tx_map.clone();
             tokio::spawn(async move {
                 if let Err(e) = run_accept_streams(acceptor, tx_map_cloned).await {
-                    error!("{}", e);
+                    error!("run_accept_streams: {}", e);
                 }
             });
 
