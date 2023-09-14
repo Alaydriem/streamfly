@@ -2,11 +2,6 @@
 
 Streamfly aims to be a stream-oriented Pub/Sub framework.
 
-Unlike traditional Pub/Sub systems, instead of transffering data
-packets(messages), streamfly focuses on transffering streams, which means users
-could publish or subscrbie a stream(Reader & Writer). Then developers can
-manipulate these streams in their applications, just like the stdin & stdout.
-
 ## Build
 
 - build streamfly cli command
@@ -29,7 +24,18 @@ cargo build --examples
 RUST_LOG=debug ./target/debug/streamfly serve
 ```
 
-- subscribe a stream
+- create a client
+
+```rust
+let mut client = new_client(
+    "127.0.0.1:1318".parse()?,
+    "localhost",
+    Path::new("./certs/cert.pem"),
+)
+.await?;
+```
+
+- subscribe streams by the channel name
 
 ```rust
 let rx = client.subscribe(CHANNEL).await?;
@@ -59,7 +65,7 @@ loop {
 ./target/debug/examples/sub
 ```
 
-- publish a stream, and then write data
+- publish a stream to that channel, and then write data on the stream
 
 ```rust
 let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
