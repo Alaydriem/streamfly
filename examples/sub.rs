@@ -17,13 +17,17 @@ async fn main() -> Result<()> {
     let rx = client.subscribe(CHANNEL).await?;
 
     loop {
-        let mut reader = rx.recv().await?;
+        let (stream_id, mut reader) = rx.recv().await?;
+        println!("accept new stream: {}", stream_id);
+
         tokio::spawn(async move {
             loop {
                 match reader.receive().await? {
-                    Some(buf) => println!("recv: {}", String::from_utf8(buf.into())?),
+                    Some(buf) => {
+                        println!("[{}]: {}", stream_id, String::from_utf8(buf.into())?);
+                    }
                     None => {
-                        println!("EOF");
+                        println!("[{}]: EOF", stream_id);
                         break;
                     }
                 }

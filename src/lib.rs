@@ -13,9 +13,12 @@ pub use crate::stream::{Reader, Writer};
 
 #[async_trait]
 pub trait Client: Send + Sync {
-    async fn open_stream(&mut self, channel: &str) -> Result<Writer>;
+    async fn open_stream(&mut self, channel: &str) -> Result<(String, Writer)>;
 
-    async fn subscribe(&mut self, channel: &str) -> Result<async_channel::Receiver<Reader>>;
+    async fn subscribe(
+        &mut self,
+        channel: &str,
+    ) -> Result<async_channel::Receiver<(String, Reader)>>;
 
     async fn close(&mut self) -> Result<()>;
 }

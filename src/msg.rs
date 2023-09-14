@@ -13,7 +13,13 @@ pub(crate) enum MsgType {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub(crate) struct MsgStream {
+pub(crate) struct MsgOpenStream {
+    pub(crate) channel: String,
+    pub(crate) stream_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct MsgSubscribeStream {
     pub(crate) channel: String,
 }
 

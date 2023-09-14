@@ -9,7 +9,7 @@ use s2n_quic::{
 
 use crate::{
     io::{read_packet, recv_request, write_packet},
-    msg::{MsgStream, MsgType},
+    msg::{MsgOpenStream, MsgSubscribeStream, MsgType},
     stream::{new_reader, new_writer},
     Reader, Writer,
 };
@@ -88,7 +88,7 @@ async fn recv_datagrams_loop(
 
         match req.msg_type {
             MsgType::Subcribe => {
-                let msg: MsgStream = rmp_serde::from_slice(&req.payload)?;
+                let msg: MsgSubscribeStream = rmp_serde::from_slice(&req.payload)?;
                 let mut all_handles = all_handles.lock().await;
                 info!("subscriber ++: [{}], {}", msg.channel, remote_addr);
                 all_handles.insert(remote_addr.to_owned(), (msg.channel, handle.to_owned()));
@@ -105,13 +105,13 @@ async fn process_recv_stream(
     let mut reader: Reader = new_reader(stream);
     info!("recv_stream ++: {}", remote_addr);
 
-    let msg: MsgStream = read_packet(&mut reader).await?;
+    let msg: MsgOpenStream = read_packet(&mut reader).await?;
     let mut all_handles = all_handles.lock().await;
 
     let mut tx_list = vec![];
     for (channel, handle) in all_handles.values_mut() {
         if channel == &msg.channel {
-            let tx = open_stream(handle, channel).await?;
+            let tx = open_stream(handle, &msg.channel, &msg.stream_id).await?;
             tx_list.push(tx);
         }
     }
@@ -133,16 +133,21 @@ async fn process_recv_stream(
     Ok(())
 }
 
-async fn open_stream(handle: &mut Handle, channel: &str) -> Result<async_channel::Sender<Vec<u8>>> {
+async fn open_stream(
+    handle: &mut Handle,
+    channel: &str,
+    stream_id: &str,
+) -> Result<async_channel::Sender<Vec<u8>>> {
     let stream = handle.open_send_stream().await?;
     let remote_addr = stream.connection().remote_addr()?.to_string();
     let mut writer: Writer = new_writer(stream);
     info!("send_stream ++: {}", remote_addr);
 
-    let msg = MsgStream {
+    let msg = MsgOpenStream {
         channel: channel.to_owned(),
+        stream_id: stream_id.to_owned(),
     };
-    write_packet(&mut writer, msg.to_owned()).await?;
+    write_packet(&mut writer, &msg).await?;
 
     let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
     tokio::spawn(async move {

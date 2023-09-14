@@ -27,7 +27,7 @@ where
     Ok(res)
 }
 
-pub(crate) async fn write_packet<T: Serialize>(w: &mut Writer, packet: T) -> Result<()> {
+pub(crate) async fn write_packet<T: Serialize>(w: &mut Writer, packet: &T) -> Result<()> {
     let buf = rmp_serde::to_vec_named(&packet)?;
     let length = buf.len() as u32;
     w.write_all(&u32::to_le_bytes(length)).await?;
