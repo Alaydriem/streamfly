@@ -13,7 +13,9 @@ async fn main() -> Result<()> {
         Path::new("./certs/cert.pem"),
     )
     .await?;
+
     let rx = client.subscribe(CHANNEL).await?;
+
     loop {
         let mut reader = rx.recv().await?;
         tokio::spawn(async move {
