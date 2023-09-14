@@ -7,17 +7,15 @@ mod msg;
 mod server;
 mod stream;
 
-pub use crate::client::connect;
+pub use crate::client::new_client;
 pub use crate::server::serve;
 pub use crate::stream::{Reader, Writer};
 
 #[async_trait]
 pub trait Client: Send + Sync {
-    async fn open_stream(&mut self, topic: &str) -> Result<Writer>;
+    async fn open_stream(&mut self, channel: &str) -> Result<Writer>;
 
-    async fn subscribe(&mut self, topic: &str) -> Result<()>;
-
-    async fn receive_stream(&mut self) -> Result<(String, Reader)>;
+    async fn subscribe(&mut self, channel: &str) -> Result<async_channel::Receiver<Reader>>;
 
     async fn close(&mut self) -> Result<()>;
 }

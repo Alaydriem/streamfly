@@ -1,17 +1,15 @@
-use std::{default::Default, path::Path, sync::Arc, task::Poll};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{bail, Result};
-use futures::{future::poll_fn, lock::Mutex, AsyncReadExt, AsyncWriteExt};
-use log::{debug, error, info};
+use futures::{lock::Mutex, AsyncWriteExt};
+use log::{debug, info};
 use s2n_quic::{
-    connection::{Handle, StreamAcceptor},
-    provider::datagram::default::{Endpoint, Receiver, Sender},
-    stream::ReceiveStream,
+    connection::Handle, provider::datagram::default::Endpoint, stream::ReceiveStream, Connection,
 };
 
 use crate::{
-    io::{read_packet, write_packet},
-    msg::{OpenStreamMsg, SubscribeAckMsg, SubscribeMsg},
+    io::{read_packet, recv_request, write_packet},
+    msg::{MsgStream, MsgType},
     stream::{new_reader, new_writer},
     Reader, Writer,
 };
@@ -32,12 +30,10 @@ pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
             bail!("{}", e)
         }
         Ok(mut s) => {
-            let all_handles = Arc::new(Mutex::new(Vec::default()));
+            let all_handles = Arc::new(Mutex::new(HashMap::new()));
 
             while let Some(conn) = s.accept().await {
-                let all_handles_cloned = all_handles.clone();
-                let (handle, acceptor) = conn.split();
-                tokio::spawn(process_conn(all_handles_cloned, handle, acceptor));
+                tokio::spawn(process_conn(all_handles.to_owned(), conn));
             }
 
             Ok(())
@@ -46,148 +42,99 @@ pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
 }
 
 async fn process_conn(
-    all_handles: Arc<Mutex<Vec<(String, Handle)>>>,
-    handle: Handle,
-    mut acceptor: StreamAcceptor,
+    all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
+    conn: Connection,
 ) -> Result<()> {
+    let (handle, mut acceptor) = conn.split();
     let remote_addr = handle.remote_addr()?.to_string();
     info!("connection ++: {}", remote_addr);
 
-    tokio::spawn(recv_datagrams_loop(all_handles.clone(), handle.clone()));
+    tokio::spawn(recv_datagrams_loop(all_handles.to_owned(), handle));
 
     while let Ok(Some(stream)) = acceptor.accept_receive_stream().await {
-        tokio::spawn(process_recv_stream(all_handles.clone(), stream));
+        tokio::spawn(process_recv_stream(all_handles.to_owned(), stream));
     }
 
     info!("connection --: {}", remote_addr);
+    all_handles.lock().await.remove(&remote_addr);
 
     Ok(())
 }
 
 async fn recv_datagrams_loop(
-    all_handles: Arc<Mutex<Vec<(String, Handle)>>>,
+    all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     handle: Handle,
 ) -> Result<()> {
+    let remote_addr = handle.remote_addr()?.to_string();
     loop {
-        match poll_fn(|cx| {
-            match handle.datagram_mut(|recv: &mut Receiver| recv.poll_recv_datagram(cx)) {
-                Ok(value) => value.map(Ok),
-                Err(err) => Poll::Ready(Err(err)),
-            }
-        })
-        .await?
-        {
-            Ok(buf) => {
-                let msg = serde_json::from_slice::<SubscribeMsg>(&buf.to_vec())?;
-                let topic = msg.topic;
+        let req = recv_request(&handle).await?;
 
-                let msg = SubscribeAckMsg {
-                    ok: true,
-                    ..Default::default()
-                };
-                let buf = serde_json::to_vec(&msg)?;
-                handle.datagram_mut(|sender: &mut Sender| {
-                    if let Err(e) = sender.send_datagram(buf.into()) {
-                        bail!(e);
-                    }
-                    anyhow::Ok(())
-                })??;
-
+        match req.msg_type {
+            MsgType::Subcribe => {
+                let msg: MsgStream = rmp_serde::from_slice(&req.payload)?;
                 let mut all_handles = all_handles.lock().await;
-                all_handles.push((topic, handle.clone()));
+                all_handles.insert(remote_addr.to_owned(), (msg.channel, handle.to_owned()));
             }
-            Err(e) => {
-                bail!(e);
-            }
-        };
+        }
     }
 }
 
 async fn process_recv_stream(
-    all_handles: Arc<Mutex<Vec<(String, Handle)>>>,
+    all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     stream: ReceiveStream,
 ) -> Result<()> {
     let remote_addr = stream.connection().remote_addr()?.to_string();
     let mut reader: Reader = new_reader(stream);
-    info!("recv_stream ++: {}-{}", remote_addr, reader.id());
+    info!("recv_stream ++: {}", remote_addr);
 
-    let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
+    let msg: MsgStream = read_packet(&mut reader).await?;
     let mut all_handles = all_handles.lock().await;
+
     let mut tx_list = vec![];
+    for (channel, handle) in all_handles.values_mut() {
+        if channel == &msg.channel {
+            let tx = open_stream(handle, channel).await?;
+            tx_list.push(tx);
+        }
+    }
+    drop(all_handles);
 
-    for (topic, handle) in all_handles.as_mut_slice() {
-        if topic == &msg.topic {
-            if let Err(e) = open_stream(handle, &msg, &mut tx_list).await {
-                error!("{}", e);
-            }
+    while let Some(buf) = reader.receive().await? {
+        debug!("recv {} bytes from {}", buf.len(), remote_addr);
+
+        for tx in &tx_list {
+            tx.send(buf.to_owned().into()).await?;
         }
     }
 
-    let mut buf = [0u8; 4096];
-    loop {
-        match reader.read(&mut buf).await {
-            Ok(length) => {
-                if length == 0 {
-                    break;
-                }
-
-                debug!("recv {} bytes from {}-{}", length, remote_addr, reader.id());
-
-                for tx in &tx_list {
-                    tx.send(buf[..length].into()).await?;
-                }
-            }
-
-            Err(e) => {
-                debug!("{}", e);
-
-                for tx in &tx_list {
-                    tx.close();
-                }
-                break;
-            }
-        }
+    for tx in &tx_list {
+        tx.close();
     }
-
-    info!("recv_stream --: {}-{}", remote_addr, reader.id());
+    info!("recv_stream --: {}", remote_addr);
 
     Ok(())
 }
 
-async fn open_stream(
-    handle: &mut Handle,
-    msg: &OpenStreamMsg,
-    tx_list: &mut Vec<async_channel::Sender<Vec<u8>>>,
-) -> Result<()> {
+async fn open_stream(handle: &mut Handle, channel: &str) -> Result<async_channel::Sender<Vec<u8>>> {
     let stream = handle.open_send_stream().await?;
     let remote_addr = stream.connection().remote_addr()?.to_string();
     let mut writer: Writer = new_writer(stream);
-    info!("send_stream ++: {}-{}", remote_addr, writer.id());
+    info!("send_stream ++: {}", remote_addr);
 
+    let msg = MsgStream {
+        channel: channel.to_owned(),
+    };
     write_packet(&mut writer, msg.to_owned()).await?;
 
     let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
-    tx_list.push(tx);
-
     tokio::spawn(async move {
-        loop {
-            if let Ok(buf) = rx.recv().await {
-                debug!(
-                    "send {} bytes to {}-{}",
-                    buf.len(),
-                    remote_addr,
-                    writer.id()
-                );
-                if let Err(e) = writer.write_all(&buf).await {
-                    error!("{}", e);
-                    break;
-                }
-            } else {
-                break;
-            }
+        while let Ok(buf) = rx.recv().await {
+            debug!("send {} bytes to {}", buf.len(), remote_addr);
+            writer.write_all(&buf).await?;
         }
-        info!("send_stream --: {}-{}", remote_addr, writer.id());
+        info!("send_stream --: {}", remote_addr);
+        anyhow::Ok(())
     });
 
-    Ok(())
+    Ok(tx)
 }

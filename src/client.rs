@@ -1,78 +1,50 @@
-use std::{net::SocketAddr, path::Path, task::Poll};
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
-use futures::future::poll_fn;
+use futures::lock::Mutex;
 use log::error;
-use s2n_quic::{
-    connection::StreamAcceptor,
-    provider::datagram::default::{Endpoint, Receiver, Sender},
-};
+use s2n_quic::{connection::StreamAcceptor, provider::datagram::default::Endpoint};
 
 use crate::{
-    io::{read_packet, write_packet},
-    msg::{OpenStreamMsg, SubscribeAckMsg, SubscribeMsg},
+    io::{read_packet, send_request, write_packet},
+    msg::{MsgStream, MsgType},
     stream::{new_reader, new_writer},
     Client, Reader, Writer,
 };
 
 struct QuicClient {
     handle: s2n_quic::connection::Handle,
-    rx: async_channel::Receiver<(String, Reader)>,
+    tx_map: Arc<Mutex<HashMap<String, async_channel::Sender<Reader>>>>,
 }
 
 #[async_trait]
 impl Client for QuicClient {
-    async fn open_stream(&mut self, topic: &str) -> Result<Writer> {
-        let stream = self.handle.open_send_stream().await?;
-        let msg = OpenStreamMsg {
-            topic: topic.to_owned(),
+    async fn open_stream(&mut self, channel: &str) -> Result<Writer> {
+        let mut writer = new_writer(self.handle.open_send_stream().await?);
+        let msg = MsgStream {
+            channel: channel.to_owned(),
         };
-        let mut writer: Writer = new_writer(stream);
         write_packet(&mut writer, msg).await?;
         Ok(writer)
     }
 
-    async fn subscribe(&mut self, topic: &str) -> Result<()> {
-        let msg = SubscribeMsg {
-            topic: topic.to_owned(),
-        };
-        let buf = serde_json::to_vec(&msg)?;
-        self.handle.datagram_mut(|sender: &mut Sender| {
-            if let Err(e) = sender.send_datagram(buf.into()) {
-                bail!(e);
-            }
-            anyhow::Ok(())
-        })??;
+    async fn subscribe(&mut self, channel: &str) -> Result<async_channel::Receiver<Reader>> {
+        let mut tx_map = self.tx_map.lock().await;
 
-        match poll_fn(|cx| {
-            match self
-                .handle
-                .datagram_mut(|recv: &mut Receiver| recv.poll_recv_datagram(cx))
-            {
-                Ok(value) => value.map(Ok),
-                Err(err) => Poll::Ready(Err(err)),
-            }
-        })
-        .await?
-        {
-            Ok(buf) => {
-                let msg = serde_json::from_slice::<SubscribeAckMsg>(&buf)?;
-                if !msg.ok {
-                    bail!(msg.reason);
-                }
-            }
-            Err(e) => {
-                bail!(e);
-            }
+        if tx_map.contains_key(channel) {
+            bail!("This channel has been subscribed.");
         }
 
-        Ok(())
-    }
+        let msg = MsgStream {
+            channel: channel.to_owned(),
+        };
+        let payload = rmp_serde::to_vec_named(&msg)?;
+        send_request(&self.handle, MsgType::Subcribe, payload).await?;
 
-    async fn receive_stream(&mut self) -> Result<(String, Reader)> {
-        let (topic, stream) = self.rx.recv().await?;
-        Ok((topic, stream))
+        let (tx, rx) = async_channel::unbounded();
+        tx_map.insert(channel.to_owned(), tx);
+        Ok(rx)
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -83,17 +55,19 @@ impl Client for QuicClient {
 
 async fn run_accept_streams(
     mut acceptor: StreamAcceptor,
-    tx: async_channel::Sender<(String, Reader)>,
+    tx_map: Arc<Mutex<HashMap<String, async_channel::Sender<Reader>>>>,
 ) -> Result<()> {
     while let Some(stream) = acceptor.accept_receive_stream().await? {
         let mut reader: Reader = new_reader(stream);
-        let msg = read_packet::<OpenStreamMsg>(&mut reader).await?;
-        tx.send((msg.topic, reader)).await?;
+        let msg: MsgStream = read_packet(&mut reader).await?;
+        if let Some(tx) = tx_map.lock().await.get(&msg.channel) {
+            tx.send(reader).await?;
+        }
     }
     Ok(())
 }
 
-pub async fn connect(
+pub async fn new_client(
     server_addr: SocketAddr,
     server_name: &str,
     cert: &Path,
@@ -119,14 +93,15 @@ pub async fn connect(
             conn.keep_alive(true)?;
 
             let (handle, acceptor) = conn.split();
-            let (tx, rx) = async_channel::unbounded();
+            let tx_map = Arc::new(Mutex::new(HashMap::new()));
+            let tx_map_cloned = tx_map.clone();
             tokio::spawn(async move {
-                if let Err(e) = run_accept_streams(acceptor, tx).await {
+                if let Err(e) = run_accept_streams(acceptor, tx_map_cloned).await {
                     error!("{}", e);
                 }
             });
 
-            Ok(Box::new(QuicClient { handle, rx }))
+            Ok(Box::new(QuicClient { handle, tx_map }))
         }
     }
 }
