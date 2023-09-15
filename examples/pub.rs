@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     for i in 0..15 {
         let msg = format!("Hello, Streamfly [{}]!", i);
         println!("[{}]: {}", stream_id, msg);
-        writer.write_all(msg.as_bytes()).await?;
+        writer.send(msg.into()).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
     writer.close().await?;

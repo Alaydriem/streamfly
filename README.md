@@ -38,8 +38,7 @@ loop {
 
 ```rust
 let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
-let msg = format!("Hello, Streamfly!");
-writer.write_all(msg.as_bytes()).await?;
+writer.send("Hello, Streamfly!".into()).await?;
 ```
 
 ## Build
