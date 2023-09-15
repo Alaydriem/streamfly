@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
     let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
     println!("publish new stream: {}", stream_id);
 
-    for i in 0..100 {
+    for i in 0..15 {
         let msg = format!("Hello, Streamfly [{}]!", i);
         println!("[{}]: {}", stream_id, msg);
         writer.write_all(msg.as_bytes()).await?;
@@ -29,6 +29,8 @@ async fn main() -> Result<()> {
     }
     writer.close().await?;
     client.close().await?;
+
+    time::sleep(Duration::from_secs(1)).await;
 
     Ok(())
 }

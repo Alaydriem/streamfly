@@ -25,17 +25,10 @@ loop {
     println!("accept new stream: {}", stream_id);
 
     tokio::spawn(async move {
-        loop {
-            match reader.receive().await? {
-                Some(buf) => {
-                    println!("[{}]: {}", stream_id, String::from_utf8(buf.into())?);
-                }
-                None => {
-                    println!("[{}]: EOF", stream_id);
-                    break;
-                }
-            }
+        while let Some(buf) = reader.receive().await? {
+            println!("[{}]: {}", stream_id, String::from_utf8(buf.into())?);
         }
+        println!("[{}]: EOF", stream_id);
         anyhow::Ok(())
     });
 }
@@ -45,14 +38,8 @@ loop {
 
 ```rust
 let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
-println!("publish new stream: {}", stream_id);
-
-for i in 0..100 {
-    let msg = format!("Hello, Streamfly [{}]!", i);
-    println!("[{}]: {}", stream_id, msg);
-    writer.write_all(msg.as_bytes()).await?;
-    time::sleep(Duration::from_secs(1)).await;
-}
+let msg = format!("Hello, Streamfly!");
+writer.write_all(msg.as_bytes()).await?;
 ```
 
 ## Build

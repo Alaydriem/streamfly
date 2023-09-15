@@ -23,17 +23,10 @@ async fn main() -> Result<()> {
         println!("accept new stream: {}", stream_id);
 
         tokio::spawn(async move {
-            loop {
-                match reader.receive().await? {
-                    Some(buf) => {
-                        println!("[{}]: {}", stream_id, String::from_utf8(buf.into())?);
-                    }
-                    None => {
-                        println!("[{}]: EOF", stream_id);
-                        break;
-                    }
-                }
+            while let Some(buf) = reader.receive().await? {
+                println!("[{}]: {}", stream_id, String::from_utf8(buf.into())?);
             }
+            println!("[{}]: EOF", stream_id);
             anyhow::Ok(())
         });
     }

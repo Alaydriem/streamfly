@@ -62,7 +62,7 @@ async fn run_accept_streams(
     mut acceptor: StreamAcceptor,
     tx_map: &Arc<Mutex<HashMap<String, async_channel::Sender<(String, Reader)>>>>,
 ) -> Result<()> {
-    while let Some(stream) = acceptor.accept_receive_stream().await? {
+    while let Ok(Some(stream)) = acceptor.accept_receive_stream().await {
         let mut reader: Reader = new_reader(stream);
         let msg: MsgOpenStream = read_packet(&mut reader).await?;
         let mut all_tx = tx_map.lock().await;
