@@ -77,7 +77,13 @@ cargo build --examples
 RUST_LOG=debug ./target/debug/streamfly serve
 ```
 
-- start the subscriber
+- start a subscriber
+
+```sh
+RUST_LOG=debug ./target/debug/examples/sub
+```
+
+- start another subscriber
 
 ```sh
 RUST_LOG=debug ./target/debug/examples/sub
