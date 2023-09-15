@@ -1,9 +1,8 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::Result;
-use futures::AsyncWriteExt;
 use streamfly::new_client;
-use tokio::time;
+use tokio::{io::AsyncWriteExt, time};
 
 const CHANNEL: &str = "demo-streamfly";
 
@@ -21,10 +20,10 @@ async fn main() -> Result<()> {
     let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
     println!("publish new stream: {}", stream_id);
 
-    for i in 0..15 {
-        let msg = format!("Hello, Streamfly [{}]!", i);
-        println!("[{}]: {}", stream_id, msg);
-        writer.send(msg.into()).await?;
+    for i in 1.. {
+        let msg = format!("[{}] [{}] Hello, Streamfly!\n", stream_id, i);
+        print!("{}", msg);
+        writer.write_all(msg.as_bytes()).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
     writer.close().await?;

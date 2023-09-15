@@ -21,16 +21,9 @@ let mut client = new_client(
 let rx = client.subscribe(CHANNEL).await?;
 
 loop {
-    let (stream_id, mut reader) = rx.recv().await?;
-    println!("accept new stream: {}", stream_id);
+    let (_, mut reader) = rx.recv().await?;
 
-    tokio::spawn(async move {
-        while let Some(buf) = reader.receive().await? {
-            println!("[{}]: {}", stream_id, String::from_utf8(buf.into())?);
-        }
-        println!("[{}]: EOF", stream_id);
-        anyhow::Ok(())
-    });
+    tokio::spawn(async move { tokio::io::copy(&mut reader, &mut tokio::io::stdout()).await });
 }
 ```
 
@@ -38,7 +31,8 @@ loop {
 
 ```rust
 let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
-writer.send("Hello, Streamfly!".into()).await?;
+
+writer.write_all(b"Hello, Streamfly!").await?;
 ```
 
 ## Build
