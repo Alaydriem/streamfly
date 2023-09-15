@@ -111,7 +111,7 @@ pub async fn new_client(
                     error!("run_accept_streams: {}", e);
                 }
                 info!("disconnected");
-                handle_cloned.close(1_u32.into());
+                handle_cloned.close(1u32.into());
                 tx_map_cloned.lock().await.clear();
             });
 

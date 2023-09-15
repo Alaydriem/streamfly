@@ -47,7 +47,7 @@ loop {
 let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
 println!("publish new stream: {}", stream_id);
 
-for i in 0..10 {
+for i in 0..100 {
     let msg = format!("Hello, Streamfly [{}]!", i);
     println!("[{}]: {}", stream_id, msg);
     writer.write_all(msg.as_bytes()).await?;
@@ -71,26 +71,26 @@ cargo build --examples
 
 ## Run the demo
 
-- start streamfly server
+- start the streamfly server
 
 ```sh
 RUST_LOG=debug ./target/debug/streamfly serve
 ```
 
-- start a subscriber
+- start a receiver
 
 ```sh
 RUST_LOG=debug ./target/debug/examples/sub
 ```
 
-- start another subscriber
-
-```sh
-RUST_LOG=debug ./target/debug/examples/sub
-```
-
-- start the publisher
+- start a sender
 
 ```sh
 RUST_LOG=debug ./target/debug/examples/pub
+```
+
+- you can start another receiver
+
+```sh
+RUST_LOG=debug ./target/debug/examples/sub
 ```
