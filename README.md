@@ -1,6 +1,6 @@
-# streamfly
+# StreamFly
 
-Streamfly aims to be a stream-oriented Pub/Sub framework.
+StreamFly aims to be a stream-oriented Pub/Sub framework.
 
 ## Quickstart
 
