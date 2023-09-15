@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{bail, Result};
+use async_channel::{unbounded, Receiver, Sender};
 use futures::{lock::Mutex, AsyncWriteExt};
 use log::{debug, error, info};
 use s2n_quic::{
@@ -15,15 +16,15 @@ use crate::{
 };
 
 pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
-    let datagram_provider = Endpoint::builder()
-        .with_send_capacity(200)?
-        .with_recv_capacity(200)?
-        .build()?;
-
     match s2n_quic::Server::builder()
         .with_tls((cert, key))?
         .with_io(addr)?
-        .with_datagram(datagram_provider)?
+        .with_datagram(
+            Endpoint::builder()
+                .with_send_capacity(200)?
+                .with_recv_capacity(200)?
+                .build()?,
+        )?
         .start()
     {
         Err(e) => {
@@ -32,6 +33,7 @@ pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
         Ok(mut s) => {
             let all_handles = Arc::new(Mutex::new(HashMap::new()));
 
+            info!("server is listening at: {}", addr);
             while let Some(conn) = s.accept().await {
                 let all_handles_cloned = all_handles.clone();
                 tokio::spawn(async move {
@@ -40,6 +42,7 @@ pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
                     }
                 });
             }
+            info!("server is closed");
 
             Ok(())
         }
@@ -108,7 +111,7 @@ async fn process_recv_stream(
     let msg: MsgOpenStream = read_packet(&mut reader).await?;
     let mut all_handles = all_handles.lock().await;
 
-    let mut tx_list = vec![];
+    let mut tx_list = Vec::new();
     for (channel, handle) in all_handles.values_mut() {
         if channel == &msg.channel {
             let tx = open_stream(handle, &msg.channel, &msg.stream_id).await?;
@@ -130,10 +133,10 @@ async fn open_stream(
     handle: &mut Handle,
     channel: &str,
     stream_id: &str,
-) -> Result<async_channel::Sender<Vec<u8>>> {
+) -> Result<Sender<Vec<u8>>> {
     let stream = handle.open_send_stream().await?;
     let remote_addr = stream.connection().remote_addr()?.to_string();
-    let mut writer: Writer = new_writer(stream);
+    let mut writer = new_writer(stream);
     info!("send_stream ++: {}", remote_addr);
 
     let msg = MsgOpenStream {
@@ -142,7 +145,7 @@ async fn open_stream(
     };
     write_packet(&mut writer, &msg).await?;
 
-    let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
+    let (tx, rx) = unbounded::<Vec<u8>>();
     tokio::spawn(async move {
         if let Err(e) = copy_data_from_rx(rx, writer, &remote_addr).await {
             error!("copy_data_from_rx: {}", e);
@@ -154,7 +157,7 @@ async fn open_stream(
 }
 
 async fn copy_data_from_rx(
-    rx: async_channel::Receiver<Vec<u8>>,
+    rx: Receiver<Vec<u8>>,
     mut writer: Writer,
     remote_addr: &str,
 ) -> anyhow::Result<()> {

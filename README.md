@@ -2,29 +2,9 @@
 
 Streamfly aims to be a stream-oriented Pub/Sub framework.
 
-## Build
+## Quickstart
 
-- build streamfly cli command
-
-```sh
-cargo build
-```
-
-- build examples
-
-```sh
-cargo build --examples
-```
-
-## Run
-
-- start streamfly server
-
-```sh
-RUST_LOG=debug ./target/debug/streamfly serve
-```
-
-- create a client
+- create a streamfly client
 
 ```rust
 let mut client = new_client(
@@ -35,7 +15,7 @@ let mut client = new_client(
 .await?;
 ```
 
-- subscribe streams by the channel name
+- subscribe streams, and then receive data
 
 ```rust
 let rx = client.subscribe(CHANNEL).await?;
@@ -61,11 +41,7 @@ loop {
 }
 ```
 
-```sh
-./target/debug/examples/sub
-```
-
-- publish a stream to that channel, and then write data on the stream
+- publish a stream, and then write data to the stream
 
 ```rust
 let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
@@ -79,6 +55,36 @@ for i in 0..10 {
 }
 ```
 
+## Build
+
+- build streamfly cli command
+
 ```sh
-./target/debug/examples/pub
+cargo build
+```
+
+- build examples
+
+```sh
+cargo build --examples
+```
+
+## Run the demo
+
+- start streamfly server
+
+```sh
+RUST_LOG=debug ./target/debug/streamfly serve
+```
+
+- start the subscriber
+
+```sh
+RUST_LOG=debug ./target/debug/examples/sub
+```
+
+- start the publisher
+
+```sh
+RUST_LOG=debug ./target/debug/examples/pub
 ```

@@ -7,6 +7,8 @@ const CHANNEL: &str = "demo-streamfly";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
+
     let mut client = new_client(
         "127.0.0.1:1318".parse()?,
         "localhost",
