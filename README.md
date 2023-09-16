@@ -40,13 +40,13 @@ writer.write_all(b"Hello, Streamfly!").await?;
 - build streamfly cli command
 
 ```sh
-cargo build
+cargo build --config build.rustflags='["--cfg", "s2n_quic_unstable"]'
 ```
 
 - build examples
 
 ```sh
-cargo build --examples
+cargo build --examples --config build.rustflags='["--cfg", "s2n_quic_unstable"]'
 ```
 
 ## Run the demo
