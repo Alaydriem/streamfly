@@ -106,8 +106,14 @@ async fn recv_datagrams_loop(
 
                 for (stream_id, (channel, txs)) in all_txs.lock().await.iter_mut() {
                     if channel == &msg.channel {
-                        let tx = open_stream(&mut handle, &msg.channel, &stream_id).await?;
-                        txs.push(tx);
+                        match open_stream(&mut handle, &msg.channel, stream_id).await {
+                            Ok(tx) => {
+                                txs.push(tx);
+                            }
+                            Err(e) => {
+                                error!("open_stream: {}", e);
+                            }
+                        }
                     }
                 }
             }
@@ -129,8 +135,14 @@ async fn process_recv_stream(
     let mut txs = Vec::new();
     for (channel, handle) in all_handles.lock().await.values_mut() {
         if channel == &msg.channel {
-            let tx = open_stream(handle, &msg.channel, &msg.stream_id).await?;
-            txs.push(tx);
+            match open_stream(handle, &msg.channel, &msg.stream_id).await {
+                Ok(tx) => {
+                    txs.push(tx);
+                }
+                Err(e) => {
+                    error!("open_stream: {}", e);
+                }
+            }
         }
     }
     all_txs
@@ -139,9 +151,9 @@ async fn process_recv_stream(
         .insert(msg.stream_id, (msg.channel, txs));
 
     tokio::spawn(async move {
-        if let Err(e) = copy_data_to_txs(reader, all_txs.to_owned(), &stream_id, &remote_addr).await
+        if let Err(e) = pipe_from_sender(reader, all_txs.to_owned(), &stream_id, &remote_addr).await
         {
-            error!("copy_data_to_txs {}:", e);
+            error!("pipe_from_sender [{}], [{}]: {}", stream_id, remote_addr, e);
         }
         info!("recv_stream --: {}, {}", stream_id, remote_addr);
         all_txs.lock().await.remove(&stream_id);
@@ -167,8 +179,11 @@ async fn open_stream(
 
     let (tx, rx) = unbounded::<Vec<u8>>();
     tokio::spawn(async move {
-        if let Err(e) = copy_data_from_rx(rx, writer, &msg.stream_id, &remote_addr).await {
-            error!("copy_data_from_rx: {}", e);
+        if let Err(e) = pipe_to_receiver(rx, writer, &msg.stream_id, &remote_addr).await {
+            error!(
+                "pipe_to_receiver [{}], [{}]: {}",
+                msg.stream_id, remote_addr, e
+            );
         }
         info!("send_stream --: {}, {}", msg.stream_id, remote_addr);
     });
@@ -176,7 +191,7 @@ async fn open_stream(
     Ok(tx)
 }
 
-async fn copy_data_from_rx(
+async fn pipe_to_receiver(
     rx: Receiver<Vec<u8>>,
     mut writer: Writer,
     stream_id: &str,
@@ -189,7 +204,7 @@ async fn copy_data_from_rx(
     Ok(())
 }
 
-async fn copy_data_to_txs(
+async fn pipe_from_sender(
     mut reader: Reader,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
     stream_id: &str,
@@ -207,6 +222,5 @@ async fn copy_data_to_txs(
             txs.retain(|tx| !tx.is_closed());
         }
     }
-
     Ok(())
 }
