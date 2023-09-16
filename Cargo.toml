@@ -2,6 +2,10 @@
 name = "streamfly"
 version = "0.1.0"
 edition = "2021"
+description = "A stream-oriented Pub/Sub framework"
+license = "MIT"
+authors = ["netxp1318"]
+repository = "https://github.com/netxp1318/streamfly"
 
 [dependencies]
 anyhow = "1.0"

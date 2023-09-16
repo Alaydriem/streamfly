@@ -4,6 +4,13 @@ StreamFly aims to be a stream-oriented Pub/Sub framework.
 
 ## Quickstart
 
+Cargo.toml
+
+```toml
+[dependencies]
+streamfly = "0.1"
+```
+
 - create a streamfly client
 
 ```rust
