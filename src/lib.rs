@@ -10,10 +10,11 @@ mod io;
 mod msg;
 mod server;
 mod stream;
+pub mod certificate;
 
 pub use crate::client::new_client;
 pub use crate::server::serve;
-pub use crate::stream::{Reader, Writer};
+pub use crate::stream::{ Reader, Writer };
 
 #[async_trait]
 pub trait Client: Send + Sync {
@@ -43,7 +44,7 @@ pub trait Client: Send + Sync {
     /// ```
     async fn subscribe(
         &mut self,
-        channel: &str,
+        channel: &str
     ) -> Result<async_channel::Receiver<(String, Reader)>>;
 
     /// Close the client

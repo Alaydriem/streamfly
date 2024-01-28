@@ -1,35 +1,37 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{ collections::HashMap, sync::Arc };
 
-use anyhow::{bail, Result};
-use async_channel::{unbounded, Receiver, Sender};
-use futures::{lock::Mutex, AsyncWriteExt};
-use log::{debug, error, info};
+use anyhow::{ bail, Result };
+use async_channel::{ unbounded, Receiver, Sender };
+use futures::{ lock::Mutex, AsyncWriteExt };
+use tracing::{ error, info, debug };
 use s2n_quic::{
-    connection::Handle, provider::datagram::default::Endpoint, stream::ReceiveStream, Connection,
+    connection::Handle,
+    provider::datagram::default::Endpoint,
+    stream::ReceiveStream,
+    Connection,
 };
 
 use crate::{
-    io::{read_packet, recv_request, write_packet},
-    msg::{MsgOpenStream, MsgSubscribeStream, MsgType},
-    stream::{new_reader, new_writer},
-    Reader, Writer,
+    io::{ read_packet, recv_request, write_packet },
+    msg::{ MsgOpenStream, MsgSubscribeStream, MsgType },
+    stream::{ new_reader, new_writer },
+    Reader,
+    Writer,
+    certificate::MtlsProvider,
 };
 
-pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
-    match s2n_quic::Server::builder()
-        .with_tls((cert, key))?
-        .with_io(addr)?
-        .with_datagram(
-            Endpoint::builder()
-                .with_send_capacity(200)?
-                .with_recv_capacity(200)?
-                .build()?,
-        )?
-        .start()
+pub async fn serve(addr: &str, provider: MtlsProvider) -> Result<()> {
+    match
+        s2n_quic::Server
+            ::builder()
+            .with_tls(provider)?
+            .with_io(addr)?
+            .with_datagram(
+                Endpoint::builder().with_send_capacity(200)?.with_recv_capacity(200)?.build()?
+            )?
+            .start()
     {
-        Err(e) => {
-            bail!("{}", e)
-        }
+        Err(e) => { bail!("{}", e) }
         Ok(mut s) => {
             let all_handles = Arc::new(Mutex::new(HashMap::new()));
             let all_txs = Arc::new(Mutex::new(HashMap::new()));
@@ -54,7 +56,7 @@ pub async fn serve(addr: &str, cert: &Path, key: &Path) -> Result<()> {
 async fn process_conn(
     all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
-    conn: Connection,
+    conn: Connection
 ) -> Result<()> {
     let (handle, mut acceptor) = conn.split();
     let remote_addr = handle.remote_addr()?.to_string();
@@ -89,7 +91,7 @@ async fn process_conn(
 async fn recv_datagrams_loop(
     all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
-    mut handle: Handle,
+    mut handle: Handle
 ) -> Result<()> {
     let remote_addr = handle.remote_addr()?.to_string();
     loop {
@@ -99,10 +101,9 @@ async fn recv_datagrams_loop(
             MsgType::Subcribe => {
                 let msg: MsgSubscribeStream = rmp_serde::from_slice(&req.payload)?;
                 info!("subscriber ++: [{}], {}", msg.channel, remote_addr);
-                all_handles.lock().await.insert(
-                    remote_addr.to_owned(),
-                    (msg.channel.to_owned(), handle.to_owned()),
-                );
+                all_handles
+                    .lock().await
+                    .insert(remote_addr.to_owned(), (msg.channel.to_owned(), handle.to_owned()));
 
                 for (stream_id, (channel, txs)) in all_txs.lock().await.iter_mut() {
                     if channel == &msg.channel {
@@ -124,7 +125,7 @@ async fn recv_datagrams_loop(
 async fn process_recv_stream(
     all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
-    stream: ReceiveStream,
+    stream: ReceiveStream
 ) -> Result<()> {
     let remote_addr = stream.connection().remote_addr()?.to_string();
     let mut reader: Reader = new_reader(stream);
@@ -145,13 +146,16 @@ async fn process_recv_stream(
             }
         }
     }
-    all_txs
-        .lock()
-        .await
-        .insert(msg.stream_id, (msg.channel, txs));
+    all_txs.lock().await.insert(msg.stream_id, (msg.channel, txs));
 
     tokio::spawn(async move {
-        if let Err(e) = pipe_from_sender(reader, all_txs.to_owned(), &stream_id, &remote_addr).await
+        if
+            let Err(e) = pipe_from_sender(
+                reader,
+                all_txs.to_owned(),
+                &stream_id,
+                &remote_addr
+            ).await
         {
             error!("pipe_from_sender [{}], [{}]: {}", stream_id, remote_addr, e);
         }
@@ -165,7 +169,7 @@ async fn process_recv_stream(
 async fn open_stream(
     handle: &mut Handle,
     channel: &str,
-    stream_id: &str,
+    stream_id: &str
 ) -> Result<Sender<Vec<u8>>> {
     let stream = handle.open_send_stream().await?;
     let remote_addr = stream.connection().remote_addr()?.to_string();
@@ -180,10 +184,7 @@ async fn open_stream(
     let (tx, rx) = unbounded::<Vec<u8>>();
     tokio::spawn(async move {
         if let Err(e) = pipe_to_receiver(rx, writer, &msg.stream_id, &remote_addr).await {
-            error!(
-                "pipe_to_receiver [{}], [{}]: {}",
-                msg.stream_id, remote_addr, e
-            );
+            error!("pipe_to_receiver [{}], [{}]: {}", msg.stream_id, remote_addr, e);
         }
         info!("send_stream --: {}, {}", msg.stream_id, remote_addr);
     });
@@ -195,7 +196,7 @@ async fn pipe_to_receiver(
     rx: Receiver<Vec<u8>>,
     mut writer: Writer,
     stream_id: &str,
-    remote_addr: &str,
+    remote_addr: &str
 ) -> anyhow::Result<()> {
     while let Ok(buf) = rx.recv().await {
         debug!("send {} bytes: {}, {}", buf.len(), stream_id, remote_addr);
@@ -208,7 +209,7 @@ async fn pipe_from_sender(
     mut reader: Reader,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
     stream_id: &str,
-    remote_addr: &str,
+    remote_addr: &str
 ) -> anyhow::Result<()> {
     while let Some(buf) = reader.receive().await? {
         debug!("recv {} bytes: {}, {}", buf.len(), stream_id, remote_addr);

@@ -1,22 +1,32 @@
 [package]
 name = "streamfly"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A stream-oriented Pub/Sub framework"
 license = "MIT"
-authors = ["netxp1318"]
-repository = "https://github.com/netxp1318/streamfly"
+authors = [
+    "netxp1318",
+    "Alaydriem",
+    "Charles R. Portwood II <charlesportwoodii@erianna.com>",
+]
+repository = "https://github.com/alaydriem/streamfly"
+keywords = ["pubsub", "pub", "sub", "stream", "networking", "quic"]
 
 [dependencies]
-anyhow = "1.0"
-async-channel = "1"
-async-trait = "0.1"
-clap = { version = "4", features = ["derive"] }
-env_logger = "0.10"
-futures = "0.3"
-log = "0.4"
-nanoid = "0.4"
-rmp-serde = "1.1"
-s2n-quic = { version = "1", features = ["unstable-provider-datagram"] }
-serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
+anyhow = { version = "^1.0" }
+async-channel = { version = "^1" }
+async-trait = { version = "^0.1" }
+env_logger = { version = "^0.10" }
+futures = { version = "^0.3" }
+nanoid = { version = "^0.4" }
+rmp-serde = { version = "^1.1" }
+tracing = { version = "^0.1" }
+s2n-quic = { version = "^1.32", features = [
+    "provider-address-token-default",
+    "provider-tls-rustls",
+    "provider-event-tracing",
+    "unstable-provider-datagram",
+] }
+serde = { version = "^1", features = ["derive"] }
+tokio = { version = "^1.11", features = ["full"] }
+rustls-pemfile = { version = "^1.0" }
