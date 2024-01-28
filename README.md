@@ -11,18 +11,19 @@ Cargo.toml
 streamfly = "0.1"
 ```
 
-- create a streamfly client
+#### Create a Client
 
 ```rust
-let mut client = new_client(
-    "127.0.0.1:1318".parse()?,
-    "localhost",
-    Path::new("./certs/cert.pem"),
-)
-.await?;
+let ca_cert = Path::new("./certs/ca.crt");
+let cert = Path::new("./certs/test.crt");
+let key = Path::new("./certs/test.key");
+
+let provider = MtlsProvider::new(ca_cert, cert, key).await?;
+
+let mut client = new_client("127.0.0.1:1318".parse()?, "localhost", provider).await?;
 ```
 
-- subscribe streams, and then receive data
+#### Subscribe
 
 ```rust
 let rx = client.subscribe(CHANNEL).await?;
@@ -34,7 +35,7 @@ loop {
 }
 ```
 
-- publish a stream, and then write data to the stream
+#### Publish
 
 ```rust
 let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
@@ -42,42 +43,18 @@ let (stream_id, mut writer) = client.open_stream(CHANNEL).await?;
 writer.write_all(b"Hello, Streamfly!").await?;
 ```
 
-## Build
+### Examples
 
-- build streamfly cli command
+```
+# Start the server
+cargo run --example server
 
-```sh
-RUSTFLAGS="--cfg s2n_quic_unstable" cargo build
+# Start a publisher
+cargo run --example pub
 ```
 
-- build examples
+You can then spawn as many subscribers as you want
 
-```sh
-RUSTFLAGS="--cfg s2n_quic_unstable" cargo build --examples
 ```
-
-## Run the demo
-
-- start the streamfly server
-
-```sh
-RUST_LOG=debug ./target/debug/streamfly serve
-```
-
-- start a receiver
-
-```sh
-RUST_LOG=debug ./target/debug/examples/sub
-```
-
-- start a sender
-
-```sh
-RUST_LOG=debug ./target/debug/examples/pub
-```
-
-- you can start another receiver
-
-```sh
-RUST_LOG=debug ./target/debug/examples/sub
+cargo run --example sub
 ```
