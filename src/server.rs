@@ -2,7 +2,8 @@ use std::{ collections::HashMap, sync::Arc };
 
 use anyhow::{ bail, Result };
 use async_channel::{ unbounded, Receiver, Sender };
-use futures::{ lock::Mutex, AsyncWriteExt };
+use bytes::Bytes;
+use futures::{ future::BoxFuture, lock::Mutex, AsyncWriteExt, Future };
 use tracing::{ error, info, debug };
 use s2n_quic::{
     connection::Handle,
@@ -20,14 +21,18 @@ use crate::{
     certificate::MtlsProvider,
 };
 
-pub async fn serve(addr: &str, provider: MtlsProvider) -> Result<()> {
+pub async fn serve(
+    addr: &str,
+    provider: MtlsProvider,
+    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
+) -> Result<()> {
     match
         s2n_quic::Server
             ::builder()
             .with_tls(provider)?
             .with_io(addr)?
             .with_datagram(
-                Endpoint::builder().with_send_capacity(200)?.with_recv_capacity(200)?.build()?
+                Endpoint::builder().with_send_capacity(1400)?.with_recv_capacity(1400)?.build()?
             )?
             .start()
     {
@@ -40,8 +45,15 @@ pub async fn serve(addr: &str, provider: MtlsProvider) -> Result<()> {
             while let Some(conn) = s.accept().await {
                 let all_handles_cloned = all_handles.clone();
                 let all_txs_cloned = all_txs.clone();
-                tokio::spawn(async {
-                    if let Err(e) = process_conn(all_handles_cloned, all_txs_cloned, conn).await {
+                tokio::spawn(async move {
+                    if
+                        let Err(e) = process_conn(
+                            all_handles_cloned,
+                            all_txs_cloned,
+                            conn,
+                            mutator
+                        ).await
+                    {
                         error!("process_conn: {}", e);
                     }
                 });
@@ -56,7 +68,8 @@ pub async fn serve(addr: &str, provider: MtlsProvider) -> Result<()> {
 async fn process_conn(
     all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
-    conn: Connection
+    conn: Connection,
+    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
 ) -> Result<()> {
     let (handle, mut acceptor) = conn.split();
     let remote_addr = handle.remote_addr()?.to_string();
@@ -73,8 +86,15 @@ async fn process_conn(
     while let Ok(Some(stream)) = acceptor.accept_receive_stream().await {
         let all_handles_cloned = all_handles.clone();
         let all_txs_cloned = all_txs.clone();
-        tokio::spawn(async {
-            if let Err(e) = process_recv_stream(all_handles_cloned, all_txs_cloned, stream).await {
+        tokio::spawn(async move {
+            if
+                let Err(e) = process_recv_stream(
+                    all_handles_cloned,
+                    all_txs_cloned,
+                    stream,
+                    mutator
+                ).await
+            {
                 error!("process_recv_stream: {}", e);
             }
         });
@@ -125,7 +145,8 @@ async fn recv_datagrams_loop(
 async fn process_recv_stream(
     all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
-    stream: ReceiveStream
+    stream: ReceiveStream,
+    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
 ) -> Result<()> {
     let remote_addr = stream.connection().remote_addr()?.to_string();
     let mut reader: Reader = new_reader(stream);
@@ -154,7 +175,8 @@ async fn process_recv_stream(
                 reader,
                 all_txs.to_owned(),
                 &stream_id,
-                &remote_addr
+                &remote_addr,
+                mutator
             ).await
         {
             error!("pipe_from_sender [{}], [{}]: {}", stream_id, remote_addr, e);
@@ -209,11 +231,18 @@ async fn pipe_from_sender(
     mut reader: Reader,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
     stream_id: &str,
-    remote_addr: &str
+    remote_addr: &str,
+    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
 ) -> anyhow::Result<()> {
-    while let Some(buf) = reader.receive().await? {
+    while let Some(mut buf) = reader.receive().await? {
         debug!("recv {} bytes: {}, {}", buf.len(), stream_id, remote_addr);
 
+        buf = match mutator(buf.as_ref()).await {
+            Ok(buf) => buf,
+            Err(_) => {
+                continue;
+            }
+        };
         if let Some((_, txs)) = all_txs.lock().await.get_mut(stream_id) {
             for tx in txs.into_iter() {
                 if tx.send(buf.to_owned().into()).await.is_err() {

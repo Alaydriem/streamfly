@@ -30,3 +30,4 @@ s2n-quic = { version = "^1.32", features = [
 serde = { version = "^1", features = ["derive"] }
 tokio = { version = "^1.11", features = ["full"] }
 rustls-pemfile = { version = "^1.0" }
+bytes = { version = "^1.5" }

@@ -22,9 +22,9 @@ async fn main() -> Result<()> {
     println!("publish new stream: {}", stream_id);
 
     for i in 1.. {
-        let msg = format!("[{}] [{}] Hello, Streamfly!\n", stream_id, i);
-        print!("{}", msg);
+        let msg = format!("[{}] [{}] Hello, Streamfly!", stream_id, i);
         writer.write_all(msg.as_bytes()).await?;
+        time::sleep(Duration::from_millis(1)).await;
     }
     writer.close().await?;
     client.close().await?;

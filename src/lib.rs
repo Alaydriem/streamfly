@@ -16,6 +16,12 @@ pub use crate::client::new_client;
 pub use crate::server::serve;
 pub use crate::stream::{ Reader, Writer };
 
+use bytes::Bytes;
+#[async_trait]
+pub trait Mutator: Send + Sync {
+    async fn mutate(&self, data: &[u8]) -> anyhow::Result<Bytes, ()>;
+}
+
 #[async_trait]
 pub trait Client: Send + Sync {
     /// Open a stream according to the channel

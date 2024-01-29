@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use anyhow::Result;
+use bytes::Bytes;
+use futures::{ future::{ self, BoxFuture }, Future, FutureExt };
 use streamfly::{ certificate::MtlsProvider, serve };
 
 #[tokio::main]
@@ -11,7 +13,13 @@ async fn main() -> Result<()> {
 
     let provider = MtlsProvider::new(ca_cert, cert, key).await?;
 
-    _ = serve("127.0.0.1:1318", provider).await;
+    _ = serve("127.0.0.1:1318", provider, mutator).await;
 
     Ok(())
+}
+
+fn mutator(data: &[u8]) -> BoxFuture<'static, Result<Bytes, ()>> {
+    let s = String::from_utf8_lossy(data);
+    let f = s.to_string() + "foo\n";
+    future::ready(Ok(f.into())).boxed()
 }

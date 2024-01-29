@@ -90,7 +90,7 @@ pub async fn new_client(
             .with_tls(provider)?
             .with_io("0.0.0.0:0")?
             .with_datagram(
-                Endpoint::builder().with_send_capacity(200)?.with_recv_capacity(200)?.build()?
+                Endpoint::builder().with_send_capacity(1400)?.with_recv_capacity(1400)?.build()?
             )?
             .start()
     {
