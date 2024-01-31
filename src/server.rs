@@ -3,7 +3,8 @@ use std::{ collections::HashMap, sync::Arc };
 use anyhow::{ bail, Result };
 use async_channel::{ unbounded, Receiver, Sender };
 use bytes::Bytes;
-use futures::{ future::BoxFuture, lock::Mutex, AsyncWriteExt, Future };
+use futures::{ future::BoxFuture, lock::Mutex, AsyncWriteExt };
+use tokio::task::JoinHandle;
 use tracing::{ error, info, debug };
 use s2n_quic::{
     connection::Handle,
@@ -25,10 +26,11 @@ pub async fn serve(
     addr: &str,
     provider: MtlsProvider,
     mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
-) -> Result<()> {
+) -> Result<JoinHandle<()>> {
     match
         s2n_quic::Server
             ::builder()
+            .with_event(s2n_quic::provider::event::tracing::Subscriber::default())?
             .with_tls(provider)?
             .with_io(addr)?
             .with_datagram(
@@ -38,29 +40,31 @@ pub async fn serve(
     {
         Err(e) => { bail!("{}", e) }
         Ok(mut s) => {
-            let all_handles = Arc::new(Mutex::new(HashMap::new()));
-            let all_txs = Arc::new(Mutex::new(HashMap::new()));
-
             info!("server is listening at: {}", addr);
-            while let Some(conn) = s.accept().await {
-                let all_handles_cloned = all_handles.clone();
-                let all_txs_cloned = all_txs.clone();
-                tokio::spawn(async move {
-                    if
-                        let Err(e) = process_conn(
-                            all_handles_cloned,
-                            all_txs_cloned,
-                            conn,
-                            mutator
-                        ).await
-                    {
-                        error!("process_conn: {}", e);
-                    }
-                });
-            }
-            info!("server is closed");
+            let task = tokio::spawn(async move {
+                let mutator = mutator.clone();
+                let all_handles = Arc::new(Mutex::new(HashMap::new()));
+                let all_txs = Arc::new(Mutex::new(HashMap::new()));
 
-            Ok(())
+                while let Some(conn) = s.accept().await {
+                    let all_handles_cloned = all_handles.clone();
+                    let all_txs_cloned = all_txs.clone();
+                    tokio::spawn(async move {
+                        if
+                            let Err(e) = process_conn(
+                                all_handles_cloned,
+                                all_txs_cloned,
+                                conn,
+                                mutator
+                            ).await
+                        {
+                            error!("process_conn: {}", e);
+                        }
+                    });
+                }
+                info!("server is closed");
+            });
+            return Ok(task);
         }
     }
 }

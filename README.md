@@ -8,7 +8,37 @@ Cargo.toml
 
 ```toml
 [dependencies]
-streamfly = "0.1"
+streamfly = { git = "https://github.com/alaydriem/streamfly" }
+```
+
+#### Create a Server
+
+```rust
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ca_cert = Path::new("./certs/ca.crt");
+    let cert = Path::new("./certs/ca.crt");
+    let key = Path::new("./certs/ca.key");
+
+    let provider = MtlsProvider::new(ca_cert, cert, key).await?;
+
+    match serve("127.0.0.1:1318", provider, mutator).await {
+        Ok(listener) => {
+            _ = listener.await;
+        }
+        Err(e) => {
+            println!("{}", e.to_string());
+        }
+    }
+
+    Ok(())
+}
+
+fn mutator(data: &[u8]) -> BoxFuture<'static, Result<Bytes, ()>> {
+    let s = String::from_utf8_lossy(data);
+    future::ready(Ok(s.into())).boxed()
+}
+
 ```
 
 #### Create a Client
