@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
 
     let provider = MtlsProvider::new(ca_cert, cert, key).await?;
 
-    match serve("127.0.0.1:1318", provider, mutator).await {
+    match serve("127.0.0.1:3001", provider, mutator).await {
         Ok(listener) => {
             _ = listener.await;
         }
@@ -25,8 +25,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn mutator(data: &[u8]) -> BoxFuture<'static, Result<Bytes, ()>> {
+fn mutator(data: &mut Vec<u8>) -> BoxFuture<'static, Result<Bytes, ()>> {
     let s = String::from_utf8_lossy(data);
     let f = s.to_string() + "foo\n";
+    *data = Vec::new();
+    data.shrink_to(0);
+    data.truncate(0);
     future::ready(Ok(f.into())).boxed()
 }

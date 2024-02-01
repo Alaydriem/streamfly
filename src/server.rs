@@ -25,7 +25,7 @@ use crate::{
 pub async fn serve(
     addr: &str,
     provider: MtlsProvider,
-    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
+    mutator: fn(&mut Vec<u8>) -> BoxFuture<'static, Result<Bytes, ()>>
 ) -> Result<JoinHandle<()>> {
     match
         s2n_quic::Server
@@ -73,7 +73,7 @@ async fn process_conn(
     all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
     conn: Connection,
-    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
+    mutator: fn(&mut Vec<u8>) -> BoxFuture<'static, Result<Bytes, ()>>
 ) -> Result<()> {
     let (handle, mut acceptor) = conn.split();
     let remote_addr = handle.remote_addr()?.to_string();
@@ -150,7 +150,7 @@ async fn process_recv_stream(
     all_handles: Arc<Mutex<HashMap<String, (String, Handle)>>>,
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
     stream: ReceiveStream,
-    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
+    mutator: fn(&mut Vec<u8>) -> BoxFuture<'static, Result<Bytes, ()>>
 ) -> Result<()> {
     let remote_addr = stream.connection().remote_addr()?.to_string();
     let mut reader: Reader = new_reader(stream);
@@ -236,12 +236,14 @@ async fn pipe_from_sender(
     all_txs: Arc<Mutex<HashMap<String, (String, Vec<Sender<Vec<u8>>>)>>>,
     stream_id: &str,
     remote_addr: &str,
-    mutator: fn(&[u8]) -> BoxFuture<'static, Result<Bytes, ()>>
+    mutator: fn(&mut Vec<u8>) -> BoxFuture<'static, Result<Bytes, ()>>
 ) -> anyhow::Result<()> {
+    let mut packet = Vec::<u8>::new();
     while let Some(mut buf) = reader.receive().await? {
+        packet.append(&mut buf.to_vec());
         debug!("recv {} bytes: {}, {}", buf.len(), stream_id, remote_addr);
 
-        buf = match mutator(buf.as_ref()).await {
+        buf = match mutator(&mut packet).await {
             Ok(buf) => buf,
             Err(_) => {
                 continue;

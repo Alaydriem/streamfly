@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
 
     let provider = MtlsProvider::new(ca_cert, cert, key).await?;
 
-    let mut client = new_client("127.0.0.1:1318".parse()?, "localhost", provider).await?;
+    let mut client = new_client("127.0.0.1:3001".parse()?, "localhost", provider).await?;
 
     let rx = client.subscribe(CHANNEL).await?;
 
